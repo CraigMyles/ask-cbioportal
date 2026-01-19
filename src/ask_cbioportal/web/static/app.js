@@ -275,11 +275,24 @@ function finalizeMessage(messageDiv) {
 
 // Chart rendering
 function renderCharts(container) {
-    // Find code blocks with 'chart' language
-    const codeBlocks = container.querySelectorAll('pre code.language-chart');
+    // Find code blocks with 'chart' language (handle various class formats)
+    const codeBlocks = container.querySelectorAll('pre code');
     codeBlocks.forEach((block, index) => {
+        // Check if this is a chart block by class or content
+        const isChartByClass = block.className.includes('chart') ||
+                               block.className.includes('language-chart');
+        const content = block.textContent.trim();
+        const looksLikeChartJson = content.startsWith('{') &&
+                                    content.includes('"type"') &&
+                                    (content.includes('"pie"') || content.includes('"bar"') ||
+                                     content.includes('"doughnut"') || content.includes('"line"'));
+
+        if (!isChartByClass && !looksLikeChartJson) return;
+
         try {
-            const chartConfig = JSON.parse(block.textContent);
+            const chartConfig = JSON.parse(content);
+            if (!chartConfig.type || !chartConfig.data) return; // Not a valid chart config
+
             const pre = block.parentElement;
 
             // Create chart container

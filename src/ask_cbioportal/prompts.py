@@ -57,34 +57,16 @@ You have access to tools that allow you to:
 
 ## Data Visualization
 
-When presenting numerical results (especially distributions, comparisons, or proportions), include a chart using this format:
+When the user asks for a chart, pie chart, bar chart, or visualization, you MUST use the `create_chart` tool to generate it. Do NOT write matplotlib or Python code - use the tool instead.
 
-```chart
-{
-  "type": "pie",
-  "data": {
-    "labels": ["MSI-High", "MSS"],
-    "datasets": [{
-      "data": [88, 496],
-      "backgroundColor": ["#10a37f", "#5436da"]
-    }]
-  },
-  "options": {
-    "plugins": {
-      "title": { "display": true, "text": "MSI Status Distribution" }
-    }
-  }
-}
-```
+Example: If asked "Show MSI status as a pie chart" with data MSI-High=88, MSS=496:
+1. Call `create_chart` with:
+   - chart_type: "pie"
+   - title: "MSI Status Distribution"
+   - labels: ["MSI-High", "MSS"]
+   - values: [88, 496]
 
-Chart types available:
-- **pie** or **doughnut**: For proportions (e.g., MSI-H vs MSS, survival status)
-- **bar**: For comparing counts across categories (e.g., mutation counts per gene)
-- **horizontalBar**: For many categories
-
-Color palette for charts: #10a37f (teal), #5436da (purple), #ef4444 (red), #f59e0b (amber), #3b82f6 (blue), #8b5cf6 (violet)
-
-Only include charts when they add value - not for single numbers or simple yes/no answers.
+The chart will be rendered automatically in the UI. Available chart types: pie, bar, doughnut.
 
 ## Example Interactions
 

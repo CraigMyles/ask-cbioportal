@@ -241,6 +241,34 @@ class RestApiBackend(Backend):
                     "required": ["study_id", "gene_symbols"],
                 },
             ),
+            BackendTool(
+                name="create_chart",
+                description="Create a chart visualization. Use this when the user asks for a chart, pie chart, bar chart, or visualization. Returns a chart that will be rendered in the UI.",
+                parameters={
+                    "properties": {
+                        "chart_type": {
+                            "type": "string",
+                            "enum": ["pie", "bar", "doughnut"],
+                            "description": "Type of chart: pie, bar, or doughnut",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Chart title",
+                        },
+                        "labels": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Labels for the data points (e.g., ['MSI-High', 'MSS'])",
+                        },
+                        "values": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Numeric values for each label (e.g., [88, 496])",
+                        },
+                    },
+                    "required": ["chart_type", "title", "labels", "values"],
+                },
+            ),
         ]
 
     async def execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
@@ -664,6 +692,44 @@ class RestApiBackend(Backend):
         response.raise_for_status()
 
         return ToolResult(success=True, data=response.json())
+
+    async def _tool_create_chart(
+        self,
+        chart_type: str,
+        title: str,
+        labels: list[str],
+        values: list[float],
+    ) -> ToolResult:
+        """Create a chart visualization that will be rendered in the UI."""
+        # Color palette
+        colors = ["#10a37f", "#5436da", "#ef4444", "#f59e0b", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6"]
+
+        # Build Chart.js config
+        chart_config = {
+            "type": chart_type,
+            "data": {
+                "labels": labels,
+                "datasets": [{
+                    "data": values,
+                    "backgroundColor": colors[:len(values)],
+                }]
+            },
+            "options": {
+                "plugins": {
+                    "title": {"display": True, "text": title}
+                }
+            }
+        }
+
+        # Return the chart as a special markdown block that the frontend will render
+        chart_json = json.dumps(chart_config, indent=2)
+        chart_markdown = f"```chart\n{chart_json}\n```"
+
+        # Return the chart markdown directly - the LLM should include this in its response
+        return ToolResult(
+            success=True,
+            data=f"Chart created successfully. Include this EXACTLY in your response to display it:\n\n{chart_markdown}\n\nIMPORTANT: Copy the above chart block exactly as shown."
+        )
 
     def get_system_prompt_addition(self) -> str:
         """Return additional context for the REST API backend."""
