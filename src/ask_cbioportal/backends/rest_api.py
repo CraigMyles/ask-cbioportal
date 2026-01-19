@@ -322,9 +322,10 @@ class RestApiBackend(Backend):
 
     async def _tool_get_genes(self, gene_symbols: list[str]) -> ToolResult:
         """Get information about specific genes."""
-        # The API expects a POST with gene IDs
+        # The API expects a POST with gene IDs and geneIdType parameter
         response = await self._client.post(
             "/genes/fetch",
+            params={"geneIdType": "HUGO_GENE_SYMBOL"},
             json=gene_symbols,
             headers={"Content-Type": "application/json"},
         )
@@ -341,6 +342,7 @@ class RestApiBackend(Backend):
         # First, get the gene info to get entrezGeneId
         gene_response = await self._client.post(
             "/genes/fetch",
+            params={"geneIdType": "HUGO_GENE_SYMBOL"},
             json=[gene_symbol],
             headers={"Content-Type": "application/json"},
         )
@@ -374,10 +376,13 @@ class RestApiBackend(Backend):
 
             profile_id = mutation_profile.get("molecularProfileId")
 
-            # Get mutations
+            # Get mutations - requires sampleListId parameter
             response = await self._client.get(
                 f"/molecular-profiles/{profile_id}/mutations",
-                params={"entrezGeneId": entrez_gene_id},
+                params={
+                    "entrezGeneId": entrez_gene_id,
+                    "sampleListId": f"{study_id}_all",
+                },
             )
             response.raise_for_status()
             mutations = response.json()[:limit]
@@ -503,6 +508,7 @@ class RestApiBackend(Backend):
         # Get gene info
         gene_response = await self._client.post(
             "/genes/fetch",
+            params={"geneIdType": "HUGO_GENE_SYMBOL"},
             json=gene_symbols,
             headers={"Content-Type": "application/json"},
         )
@@ -516,7 +522,10 @@ class RestApiBackend(Backend):
 
             mutations_response = await self._client.get(
                 f"/molecular-profiles/{profile_id}/mutations",
-                params={"entrezGeneId": entrez_id},
+                params={
+                    "entrezGeneId": entrez_id,
+                    "sampleListId": f"{study_id}_all",
+                },
             )
             mutations_response.raise_for_status()
             mutations = mutations_response.json()
@@ -581,6 +590,7 @@ class RestApiBackend(Backend):
         # Get gene info
         gene_response = await self._client.post(
             "/genes/fetch",
+            params={"geneIdType": "HUGO_GENE_SYMBOL"},
             json=gene_symbols,
             headers={"Content-Type": "application/json"},
         )
