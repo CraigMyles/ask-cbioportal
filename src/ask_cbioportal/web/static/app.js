@@ -269,7 +269,71 @@ function finalizeMessage(messageDiv) {
     if (messageDiv.rawContent) {
         contentDiv.innerHTML = marked.parse(messageDiv.rawContent);
         contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        renderCharts(contentDiv);
     }
+}
+
+// Chart rendering
+function renderCharts(container) {
+    // Find code blocks with 'chart' language
+    const codeBlocks = container.querySelectorAll('pre code.language-chart');
+    codeBlocks.forEach((block, index) => {
+        try {
+            const chartConfig = JSON.parse(block.textContent);
+            const pre = block.parentElement;
+
+            // Create chart container
+            const chartContainer = document.createElement('div');
+            chartContainer.className = 'chart-container';
+            chartContainer.style.cssText = 'max-width: 500px; margin: 16px 0; background: var(--bg-secondary); padding: 16px; border-radius: 8px;';
+
+            const canvas = document.createElement('canvas');
+            canvas.id = `chart-${Date.now()}-${index}`;
+            chartContainer.appendChild(canvas);
+
+            // Replace code block with chart
+            pre.replaceWith(chartContainer);
+
+            // Apply dark theme defaults
+            const config = {
+                ...chartConfig,
+                options: {
+                    ...chartConfig.options,
+                    responsive: true,
+                    plugins: {
+                        ...chartConfig.options?.plugins,
+                        legend: {
+                            ...chartConfig.options?.plugins?.legend,
+                            labels: {
+                                color: '#ececec',
+                                ...chartConfig.options?.plugins?.legend?.labels
+                            }
+                        },
+                        title: {
+                            ...chartConfig.options?.plugins?.title,
+                            color: '#ececec'
+                        }
+                    },
+                    scales: chartConfig.type === 'pie' || chartConfig.type === 'doughnut' ? undefined : {
+                        x: {
+                            ticks: { color: '#b4b4b4' },
+                            grid: { color: '#3a3a3a' },
+                            ...chartConfig.options?.scales?.x
+                        },
+                        y: {
+                            ticks: { color: '#b4b4b4' },
+                            grid: { color: '#3a3a3a' },
+                            ...chartConfig.options?.scales?.y
+                        }
+                    }
+                }
+            };
+
+            new Chart(canvas, config);
+        } catch (e) {
+            console.error('Failed to render chart:', e);
+        }
+    });
 }
 
 function renderMessages(messages) {
@@ -289,6 +353,7 @@ function renderMessages(messages) {
             const contentDiv = messageDiv.querySelector('.message-content');
             contentDiv.innerHTML = marked.parse(msg.content);
             contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+            renderCharts(contentDiv);
         }
     });
 

@@ -55,6 +55,37 @@ You have access to tools that allow you to:
 5. **Summarize results**: Present data in a clear, organized manner
 6. **Acknowledge limitations**: Be clear about what the data can and cannot tell us
 
+## Data Visualization
+
+When presenting numerical results (especially distributions, comparisons, or proportions), include a chart using this format:
+
+```chart
+{
+  "type": "pie",
+  "data": {
+    "labels": ["MSI-High", "MSS"],
+    "datasets": [{
+      "data": [88, 496],
+      "backgroundColor": ["#10a37f", "#5436da"]
+    }]
+  },
+  "options": {
+    "plugins": {
+      "title": { "display": true, "text": "MSI Status Distribution" }
+    }
+  }
+}
+```
+
+Chart types available:
+- **pie** or **doughnut**: For proportions (e.g., MSI-H vs MSS, survival status)
+- **bar**: For comparing counts across categories (e.g., mutation counts per gene)
+- **horizontalBar**: For many categories
+
+Color palette for charts: #10a37f (teal), #5436da (purple), #ef4444 (red), #f59e0b (amber), #3b82f6 (blue), #8b5cf6 (violet)
+
+Only include charts when they add value - not for single numbers or simple yes/no answers.
+
 ## Example Interactions
 
 User: "What mutations are found in BRCA1 in breast cancer?"
