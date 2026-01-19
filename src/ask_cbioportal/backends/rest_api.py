@@ -701,31 +701,46 @@ class RestApiBackend(Backend):
         values: list[float],
     ) -> ToolResult:
         """Create a chart visualization that will be rendered in the UI."""
-        # Color palette
+        # Color palette - scientific, colorblind-friendly
         colors = ["#10a37f", "#5436da", "#ef4444", "#f59e0b", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6"]
 
-        # Build Chart.js config
-        chart_config = {
-            "type": chart_type,
-            "data": {
-                "labels": labels,
-                "datasets": [{
-                    "data": values,
-                    "backgroundColor": colors[:len(values)],
-                }]
-            },
-            "options": {
-                "plugins": {
-                    "title": {"display": True, "text": title}
+        # Build Plotly config based on chart type
+        if chart_type in ["pie", "doughnut"]:
+            chart_config = {
+                "data": [{
+                    "type": "pie",
+                    "labels": labels,
+                    "values": values,
+                    "marker": {"colors": colors[:len(values)]},
+                    "textinfo": "label+percent",
+                    "textposition": "inside",
+                    "hole": 0.4 if chart_type == "doughnut" else 0,
+                    "hovertemplate": "%{label}<br>%{value} (%{percent})<extra></extra>"
+                }],
+                "layout": {
+                    "title": {"text": title, "font": {"size": 16}}
                 }
             }
-        }
+        else:  # bar chart
+            chart_config = {
+                "data": [{
+                    "type": "bar",
+                    "x": labels,
+                    "y": values,
+                    "marker": {"color": colors[:len(values)]},
+                    "hovertemplate": "%{x}<br>%{y}<extra></extra>"
+                }],
+                "layout": {
+                    "title": {"text": title, "font": {"size": 16}},
+                    "xaxis": {"title": "", "tickangle": -45 if len(labels) > 4 else 0},
+                    "yaxis": {"title": "Count", "gridcolor": "#3a3a3a"}
+                }
+            }
 
-        # Return the chart as a special markdown block that the frontend will render
+        # Return the chart as a special markdown block
         chart_json = json.dumps(chart_config, indent=2)
         chart_markdown = f"```chart\n{chart_json}\n```"
 
-        # Return the chart markdown directly - the LLM should include this in its response
         return ToolResult(
             success=True,
             data=f"Chart created successfully. Include this EXACTLY in your response to display it:\n\n{chart_markdown}\n\nIMPORTANT: Copy the above chart block exactly as shown."

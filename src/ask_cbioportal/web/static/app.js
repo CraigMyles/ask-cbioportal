@@ -273,76 +273,54 @@ function finalizeMessage(messageDiv) {
     }
 }
 
-// Chart rendering
+// Chart rendering with Plotly
 function renderCharts(container) {
-    // Find code blocks with 'chart' language (handle various class formats)
+    // Find code blocks with 'chart' language
     const codeBlocks = container.querySelectorAll('pre code');
     codeBlocks.forEach((block, index) => {
-        // Check if this is a chart block by class or content
         const isChartByClass = block.className.includes('chart') ||
                                block.className.includes('language-chart');
         const content = block.textContent.trim();
         const looksLikeChartJson = content.startsWith('{') &&
-                                    content.includes('"type"') &&
-                                    (content.includes('"pie"') || content.includes('"bar"') ||
-                                     content.includes('"doughnut"') || content.includes('"line"'));
+                                    (content.includes('"data"') || content.includes('"type"'));
 
         if (!isChartByClass && !looksLikeChartJson) return;
 
         try {
             const chartConfig = JSON.parse(content);
-            if (!chartConfig.type || !chartConfig.data) return; // Not a valid chart config
-
             const pre = block.parentElement;
 
             // Create chart container
             const chartContainer = document.createElement('div');
             chartContainer.className = 'chart-container';
-            chartContainer.style.cssText = 'max-width: 500px; margin: 16px 0; background: var(--bg-secondary); padding: 16px; border-radius: 8px;';
+            chartContainer.id = `chart-${Date.now()}-${index}`;
+            chartContainer.style.cssText = 'max-width: 600px; margin: 16px 0; background: var(--bg-secondary); padding: 16px; border-radius: 12px;';
 
-            const canvas = document.createElement('canvas');
-            canvas.id = `chart-${Date.now()}-${index}`;
-            chartContainer.appendChild(canvas);
-
-            // Replace code block with chart
+            // Replace code block with chart container
             pre.replaceWith(chartContainer);
 
-            // Apply dark theme defaults
-            const config = {
-                ...chartConfig,
-                options: {
-                    ...chartConfig.options,
-                    responsive: true,
-                    plugins: {
-                        ...chartConfig.options?.plugins,
-                        legend: {
-                            ...chartConfig.options?.plugins?.legend,
-                            labels: {
-                                color: '#ececec',
-                                ...chartConfig.options?.plugins?.legend?.labels
-                            }
-                        },
-                        title: {
-                            ...chartConfig.options?.plugins?.title,
-                            color: '#ececec'
-                        }
-                    },
-                    scales: chartConfig.type === 'pie' || chartConfig.type === 'doughnut' ? undefined : {
-                        x: {
-                            ticks: { color: '#b4b4b4' },
-                            grid: { color: '#3a3a3a' },
-                            ...chartConfig.options?.scales?.x
-                        },
-                        y: {
-                            ticks: { color: '#b4b4b4' },
-                            grid: { color: '#3a3a3a' },
-                            ...chartConfig.options?.scales?.y
-                        }
-                    }
-                }
+            // Dark theme layout
+            const darkLayout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: '#ececec', family: '-apple-system, BlinkMacSystemFont, sans-serif' },
+                margin: { t: 40, r: 20, b: 40, l: 40 },
+                showlegend: true,
+                legend: {
+                    font: { color: '#ececec' },
+                    bgcolor: 'rgba(0,0,0,0)'
+                },
+                ...chartConfig.layout
             };
 
-            new Chart(canvas, config);
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                modeBarButtonsToRemove: ['lasso2d', 'select2d'],
+                displaylogo: false
+            };
+
+            Plotly.newPlot(chartContainer.id, chartConfig.data, darkLayout, config);
         } catch (e) {
             console.error('Failed to render chart:', e);
         }
