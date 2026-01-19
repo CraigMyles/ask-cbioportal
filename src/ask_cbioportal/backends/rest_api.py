@@ -134,7 +134,7 @@ class RestApiBackend(Backend):
             ),
             BackendTool(
                 name="get_clinical_data",
-                description="Get clinical data for patients or samples in a study.",
+                description="Get clinical data for patients or samples in a study. Returns summarized statistics (counts, distributions) for large datasets. Use attribute_id to query specific attributes like MSI_SENSOR_SCORE, OS_STATUS, ER_STATUS_BY_IHC, etc.",
                 parameters={
                     "properties": {
                         "study_id": {
@@ -148,11 +148,15 @@ class RestApiBackend(Backend):
                         },
                         "attribute_id": {
                             "type": "string",
-                            "description": "Optional: Specific clinical attribute ID to fetch",
+                            "description": "Specific clinical attribute ID to fetch (e.g., MSI_SENSOR_SCORE, OS_STATUS, ER_STATUS_BY_IHC). Required for efficient queries.",
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Maximum number of records to return (default: 100)",
+                            "description": "Maximum number of raw records to return if not summarizing (default: 100)",
+                        },
+                        "summarize": {
+                            "type": "boolean",
+                            "description": "If true (default), returns summary statistics instead of raw records for large datasets",
                         },
                     },
                     "required": ["study_id", "clinical_data_type"],
@@ -429,8 +433,9 @@ class RestApiBackend(Backend):
         clinical_data_type: str,
         attribute_id: str | None = None,
         limit: int = 100,
+        summarize: bool = True,
     ) -> ToolResult:
-        """Get clinical data for a study."""
+        """Get clinical data for a study with automatic summarization."""
         endpoint = f"/studies/{study_id}/clinical-data"
         params = {"clinicalDataType": clinical_data_type}
 
@@ -439,9 +444,59 @@ class RestApiBackend(Backend):
 
         response = await self._client.get(endpoint, params=params)
         response.raise_for_status()
-        data = response.json()[:limit]
+        data = response.json()
 
-        return ToolResult(success=True, data=data)
+        total_count = len(data)
+
+        # If summarize is enabled and we have a specific attribute, provide summary statistics
+        if summarize and attribute_id and total_count > 20:
+            values = [d.get("value") for d in data if d.get("value") is not None]
+
+            # Try to detect if numeric
+            numeric_values = []
+            for v in values:
+                try:
+                    numeric_values.append(float(v))
+                except (ValueError, TypeError):
+                    pass
+
+            if len(numeric_values) > len(values) * 0.5:
+                # Mostly numeric - provide statistics
+                numeric_values.sort()
+                summary = {
+                    "attribute_id": attribute_id,
+                    "total_samples": total_count,
+                    "non_null_count": len(numeric_values),
+                    "min": min(numeric_values),
+                    "max": max(numeric_values),
+                    "mean": sum(numeric_values) / len(numeric_values),
+                    "median": numeric_values[len(numeric_values) // 2],
+                    # For MSI scores, add clinically relevant cutoffs
+                    "above_3.5": sum(1 for v in numeric_values if v > 3.5),
+                    "below_or_equal_3.5": sum(1 for v in numeric_values if v <= 3.5),
+                    "sample_values": numeric_values[:10],  # First 10 as examples
+                }
+                return ToolResult(success=True, data=summary)
+            else:
+                # Categorical - provide value counts
+                from collections import Counter
+                value_counts = Counter(values)
+                summary = {
+                    "attribute_id": attribute_id,
+                    "total_samples": total_count,
+                    "unique_values": len(value_counts),
+                    "value_counts": dict(value_counts.most_common(20)),
+                }
+                return ToolResult(success=True, data=summary)
+
+        # Return raw data if not summarizing or small dataset
+        return ToolResult(
+            success=True,
+            data={
+                "total_count": total_count,
+                "records": data[:limit],
+            }
+        )
 
     async def _tool_get_clinical_attributes(self, study_id: str) -> ToolResult:
         """Get clinical attributes available in a study."""
