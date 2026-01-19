@@ -158,6 +158,8 @@ function handleWebSocketMessage(sessionId, data) {
             updateSendButton();
         }
 
+        // Update sidebar to remove streaming indicator
+        renderChatHistory();
         saveCurrentChat();
     } else if (data.type === 'error') {
         const errorMsg = `**Error:** ${data.content}`;
@@ -177,6 +179,9 @@ function handleWebSocketMessage(sessionId, data) {
         if (isCurrentSession) {
             updateSendButton();
         }
+
+        // Update sidebar to remove streaming indicator
+        renderChatHistory();
     } else if (data.type === 'cleared') {
         session.messages = [];
         console.log('Session cleared:', sessionId);
@@ -308,6 +313,7 @@ function sendMessage() {
     session.isStreaming = true;
     shouldAutoScroll = true;
     updateSendButton();
+    renderChatHistory();  // Show streaming indicator in sidebar
 
     session.ws.send(JSON.stringify({ question: content }));
     scrollToBottom();
@@ -392,13 +398,31 @@ function loadChat(chatId) {
 
     // Restore session
     const session = getSession(chatId);
-    session.messages = chat.messages || [];
+    // Only restore messages from storage if session doesn't have them already
+    // (session.messages might have more recent data if streaming was happening)
+    if (session.messages.length === 0 && chat.messages && chat.messages.length > 0) {
+        session.messages = chat.messages;
+    }
 
     // Connect WebSocket if needed
     connectWebSocket(chatId);
 
-    // Render messages
+    // Render completed messages
     renderMessages(session.messages);
+
+    // If this session is still streaming, recreate the streaming message UI
+    if (session.isStreaming && session.pendingContent) {
+        // Create a new message div for the streaming content
+        session.currentMessageDiv = addMessageToUI('', 'assistant');
+        session.currentMessageDiv.rawContent = session.pendingContent;
+        const contentDiv = session.currentMessageDiv.querySelector('.message-content');
+        contentDiv.innerHTML = marked.parse(session.pendingContent);
+        contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+        scrollToBottom();
+    } else if (session.isStreaming) {
+        // Streaming but no content yet - show typing indicator
+        session.currentMessageDiv = addMessageToUI('', 'assistant');
+    }
 
     // Update UI
     updateSendButton();
@@ -484,10 +508,14 @@ function saveChatHistoryToStorage() {
 }
 
 function renderChatHistory() {
-    chatHistoryDiv.innerHTML = chatHistory.map(chat => `
-        <div class="chat-history-item ${chat.id === currentSessionId ? 'active' : ''}"
+    chatHistoryDiv.innerHTML = chatHistory.map(chat => {
+        const session = sessions[chat.id];
+        const isStreaming = session && session.isStreaming;
+        return `
+        <div class="chat-history-item ${chat.id === currentSessionId ? 'active' : ''} ${isStreaming ? 'streaming' : ''}"
              onclick="loadChat('${chat.id}')"
              title="${escapeHtml(chat.title)}">
+            ${isStreaming ? '<span class="streaming-indicator"></span>' : ''}
             <span class="chat-title">${escapeHtml(chat.title)}</span>
             <button class="delete-chat-btn" onclick="deleteChat('${chat.id}', event)" title="Delete chat">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -495,7 +523,7 @@ function renderChatHistory() {
                 </svg>
             </button>
         </div>
-    `).join('');
+    `}).join('');
 }
 
 // Model selection (placeholder for future implementation)
