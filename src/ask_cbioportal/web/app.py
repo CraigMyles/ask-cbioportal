@@ -1,5 +1,7 @@
 """FastAPI web application for ask-cbioportal."""
 
+import json
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -49,6 +51,126 @@ def delete_session(session_id: str) -> None:
     """Delete a session entirely."""
     if session_id in _sessions:
         del _sessions[session_id]
+
+
+def extract_chart_from_matplotlib(text: str) -> str | None:
+    """Detect matplotlib/seaborn code in response and extract data to create a chart.
+
+    This is a fallback for when the LLM outputs matplotlib code instead of using
+    the create_chart tool.
+    """
+    # Check if there's already a chart block - if so, don't process
+    if "```chart" in text:
+        return None
+
+    # Check if there's matplotlib or similar plotting code
+    matplotlib_patterns = [
+        r"plt\.pie\(",
+        r"plt\.bar\(",
+        r"plt\.figure\(",
+        r"matplotlib",
+        r"seaborn",
+        r"import\s+matplotlib",
+        r"import\s+seaborn",
+    ]
+
+    has_matplotlib = any(re.search(p, text, re.IGNORECASE) for p in matplotlib_patterns)
+    if not has_matplotlib:
+        return None
+
+    # Try to extract labels and values from the code
+    # Look for patterns like: labels = ['A', 'B', 'C'] or sizes = [10, 20, 30]
+    labels = None
+    values = None
+    title = "Data Distribution"
+    chart_type = "pie"  # Default
+
+    # Extract labels
+    labels_match = re.search(r"labels\s*=\s*\[(.*?)\]", text, re.DOTALL)
+    if labels_match:
+        labels_str = labels_match.group(1)
+        # Parse string labels
+        labels = re.findall(r'["\']([^"\']+)["\']', labels_str)
+
+    # Extract values (might be called sizes, values, counts, etc.)
+    for var_name in ["sizes", "values", "counts", "data"]:
+        values_match = re.search(rf"{var_name}\s*=\s*\[([\d,\s.]+)\]", text)
+        if values_match:
+            values_str = values_match.group(1)
+            try:
+                values = [float(x.strip()) for x in values_str.split(",") if x.strip()]
+            except ValueError:
+                pass
+            if values:
+                break
+
+    # Also try to extract from dict patterns like {'MSI-H': 88, 'MSS': 496}
+    if not labels or not values:
+        dict_match = re.search(r"\{([^}]+)\}", text)
+        if dict_match:
+            dict_content = dict_match.group(1)
+            pairs = re.findall(r'["\']([^"\']+)["\']\s*:\s*(\d+\.?\d*)', dict_content)
+            if pairs:
+                labels = [p[0] for p in pairs]
+                values = [float(p[1]) for p in pairs]
+
+    # Try to extract title
+    title_match = re.search(r"title\s*=\s*['\"]([^'\"]+)['\"]", text)
+    if title_match:
+        title = title_match.group(1)
+    else:
+        # Try plt.title("...")
+        title_match = re.search(r"plt\.title\s*\(\s*['\"]([^'\"]+)['\"]", text)
+        if title_match:
+            title = title_match.group(1)
+
+    # Detect chart type
+    if "plt.bar(" in text or "bar" in text.lower():
+        chart_type = "bar"
+    elif "plt.pie(" in text or "pie" in text.lower():
+        chart_type = "pie"
+
+    # If we extracted both labels and values, create the chart
+    if labels and values and len(labels) == len(values):
+        colors = ["#10a37f", "#5436da", "#ef4444", "#f59e0b", "#3b82f6", "#8b5cf6", "#ec4899", "#14b8a6"]
+
+        if chart_type == "pie":
+            chart_config = {
+                "data": [{
+                    "type": "pie",
+                    "labels": labels,
+                    "values": values,
+                    "name": "",
+                    "marker": {"colors": colors[:len(values)]},
+                    "textinfo": "label+percent",
+                    "textposition": "inside",
+                    "hole": 0,
+                    "hovertemplate": "<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>"
+                }],
+                "layout": {
+                    "title": {"text": title, "font": {"size": 16}}
+                }
+            }
+        else:
+            chart_config = {
+                "data": [{
+                    "type": "bar",
+                    "x": labels,
+                    "y": values,
+                    "name": "",
+                    "marker": {"color": colors[:len(values)]},
+                    "hovertemplate": "<b>%{x}</b><br>Count: %{y}<extra></extra>"
+                }],
+                "layout": {
+                    "title": {"text": title, "font": {"size": 16}},
+                    "xaxis": {"title": "", "tickangle": -45 if len(labels) > 4 else 0},
+                    "yaxis": {"title": "Count", "gridcolor": "#3a3a3a"}
+                }
+            }
+
+        return f"\n\n```chart\n{json.dumps(chart_config, indent=2)}\n```"
+
+    return None
 
 
 @asynccontextmanager
@@ -164,13 +286,28 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str) -> None:
             if not question:
                 continue
 
+            # Update model if specified in the message
+            model = data.get("model")
+            if model and agent.config.model != model:
+                agent.config.model = model
+                # Recreate LLM client with new model
+                from ask_cbioportal.agent import create_llm_client
+                agent.llm_client = create_llm_client(agent.config)
+
             try:
+                full_response = ""
                 async for chunk in agent.query_stream(question):
                     if chunk.startswith("\n[Calling"):
                         tool_name = chunk.strip().replace("\n[Calling ", "").replace("...]", "")
                         await websocket.send_json({"type": "tool_call", "name": tool_name})
                     else:
                         await websocket.send_json({"type": "chunk", "content": chunk})
+                        full_response += chunk
+
+                # Post-processing: If LLM output matplotlib code, extract and send a chart
+                chart_block = extract_chart_from_matplotlib(full_response)
+                if chart_block:
+                    await websocket.send_json({"type": "chunk", "content": chart_block})
 
                 await websocket.send_json({"type": "done"})
             except Exception as e:

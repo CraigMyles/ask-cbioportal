@@ -711,11 +711,12 @@ class RestApiBackend(Backend):
                     "type": "pie",
                     "labels": labels,
                     "values": values,
+                    "name": "",
                     "marker": {"colors": colors[:len(values)]},
                     "textinfo": "label+percent",
                     "textposition": "inside",
                     "hole": 0.4 if chart_type == "doughnut" else 0,
-                    "hovertemplate": "%{label}<br>%{value} (%{percent})<extra></extra>"
+                    "hovertemplate": "<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>"
                 }],
                 "layout": {
                     "title": {"text": title, "font": {"size": 16}}
@@ -727,8 +728,9 @@ class RestApiBackend(Backend):
                     "type": "bar",
                     "x": labels,
                     "y": values,
+                    "name": "",
                     "marker": {"color": colors[:len(values)]},
-                    "hovertemplate": "%{x}<br>%{y}<extra></extra>"
+                    "hovertemplate": "<b>%{x}</b><br>Count: %{y}<extra></extra>"
                 }],
                 "layout": {
                     "title": {"text": title, "font": {"size": 16}},

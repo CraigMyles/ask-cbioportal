@@ -3,6 +3,7 @@ let sessions = {};  // sessionId -> { ws, messages, currentMessageDiv, isStreami
 let currentSessionId = null;
 let chatHistory = [];  // Array of { id, title, timestamp, messages }
 let shouldAutoScroll = true;
+let selectedModel = localStorage.getItem('selectedModel') || 'GPT-OSS-120B';
 
 // Elements
 const chatContainer = document.getElementById('chat-container');
@@ -39,6 +40,12 @@ document.addEventListener('DOMContentLoaded', () => {
         breaks: true,
         gfm: true
     });
+
+    // Initialize model selector
+    const modelSelect = document.getElementById('model-select');
+    if (modelSelect) {
+        modelSelect.value = selectedModel;
+    }
 
     // Start with a new chat if no history
     if (chatHistory.length === 0) {
@@ -290,22 +297,25 @@ function renderCharts(container) {
             const chartConfig = JSON.parse(content);
             const pre = block.parentElement;
 
-            // Create chart container
+            // Create chart container with explicit height for Plotly - full width of chat
             const chartContainer = document.createElement('div');
             chartContainer.className = 'chart-container';
             chartContainer.id = `chart-${Date.now()}-${index}`;
-            chartContainer.style.cssText = 'max-width: 600px; margin: 16px 0; background: var(--bg-secondary); padding: 16px; border-radius: 12px;';
+            chartContainer.style.cssText = 'width: 100%; height: 420px; margin: 16px 0; background: var(--bg-secondary); padding: 16px; border-radius: 12px; box-sizing: border-box;';
 
             // Replace code block with chart container
             pre.replaceWith(chartContainer);
 
-            // Dark theme layout
+            // Dark theme layout with explicit height
+            // Hide legend for single-trace charts (no "trace 0" confusion)
+            const hasSingleTrace = chartConfig.data && chartConfig.data.length === 1;
             const darkLayout = {
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
                 font: { color: '#ececec', family: '-apple-system, BlinkMacSystemFont, sans-serif' },
-                margin: { t: 40, r: 20, b: 40, l: 40 },
-                showlegend: true,
+                margin: { t: 50, r: 30, b: 60, l: 60 },
+                height: 380,
+                showlegend: !hasSingleTrace,  // Only show legend if multiple traces
                 legend: {
                     font: { color: '#ececec' },
                     bgcolor: 'rgba(0,0,0,0)'
@@ -315,9 +325,10 @@ function renderCharts(container) {
 
             const config = {
                 responsive: true,
-                displayModeBar: true,
-                modeBarButtonsToRemove: ['lasso2d', 'select2d'],
-                displaylogo: false
+                displayModeBar: 'hover',  // Only show on hover so it doesn't cover title
+                modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d'],
+                displaylogo: false,
+                modeBarPosition: 'top-right'
             };
 
             Plotly.newPlot(chartContainer.id, chartConfig.data, darkLayout, config);
@@ -371,7 +382,7 @@ function sendMessage() {
     updateSendButton();
     renderChatHistory();  // Show streaming indicator in sidebar
 
-    session.ws.send(JSON.stringify({ question: content }));
+    session.ws.send(JSON.stringify({ question: content, model: selectedModel }));
     scrollToBottom();
 
     // Update chat title if this is the first message
@@ -582,12 +593,12 @@ function renderChatHistory() {
     `}).join('');
 }
 
-// Model selection (placeholder for future implementation)
+// Model selection - saves choice and sends with each message
 function changeModel() {
     const select = document.getElementById('model-select');
-    const model = select.value;
-    console.log('Model changed to:', model);
-    // Would need backend support to actually change models mid-session
+    selectedModel = select.value;
+    localStorage.setItem('selectedModel', selectedModel);
+    console.log('Model changed to:', selectedModel);
 }
 
 // Utilities
