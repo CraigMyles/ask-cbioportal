@@ -240,8 +240,57 @@ function appendToMessage(messageDiv, content) {
     if (!messageDiv.rawContent) messageDiv.rawContent = '';
     messageDiv.rawContent += content;
 
-    contentDiv.innerHTML = marked.parse(messageDiv.rawContent);
+    // Replace chart JSON blocks with loading placeholders during streaming
+    // Pass the messageDiv to track loading start time for smooth spinner animation
+    const displayContent = hideChartJsonDuringStreaming(messageDiv.rawContent, messageDiv);
+    contentDiv.innerHTML = marked.parse(displayContent);
     contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+}
+
+// Hide raw chart JSON during streaming and show a loading placeholder instead
+// The messageDiv parameter is used to track when loading started for smooth spinner animation
+// We hide ALL chart blocks (complete or not) during streaming to prevent JSON flash
+function hideChartJsonDuringStreaming(content, messageDiv) {
+    // Match chart code blocks - handle both proper formatting (newline before ```)
+    // and improper formatting (text directly before ```)
+    // This regex matches ```chart followed by content until closing ``` or end of string
+    const chartBlockRegex = /```chart\s*\n[\s\S]*?(?:```|$)/g;
+
+    // First, fix improperly formatted chart blocks (no newline before ```)
+    // Add a newline before ```chart if there isn't one
+    let fixedContent = content.replace(/([^\n])```chart/g, '$1\n\n```chart');
+
+    return fixedContent.replace(chartBlockRegex, (match) => {
+        // Check if the block is complete (ends with ```)
+        const isComplete = match.endsWith('```');
+
+        // Track when loading started (if not already tracking)
+        // This allows us to use a negative animation-delay to keep spinner smooth
+        if (messageDiv && !messageDiv.chartLoadingStartTime) {
+            messageDiv.chartLoadingStartTime = Date.now();
+        }
+
+        // Calculate elapsed time for smooth spinner animation
+        // Using negative animation-delay makes the spinner appear continuous
+        // even when the DOM element is recreated
+        let animationDelay = '0s';
+        if (messageDiv && messageDiv.chartLoadingStartTime) {
+            const elapsed = (Date.now() - messageDiv.chartLoadingStartTime) / 1000;
+            animationDelay = `-${elapsed}s`;
+        }
+
+        // Always show loading indicator during streaming - even for complete blocks
+        // This prevents the brief flash of raw JSON before the chart renders
+        // The actual chart will be rendered in finalizeMessage()
+        const loadingText = isComplete ? 'Rendering chart...' : 'Generating chart...';
+
+        return `
+<div class="chart-loading" data-chart-complete="${isComplete}">
+    <div class="chart-loading-spinner" style="animation-delay: ${animationDelay}"></div>
+    <span class="chart-loading-text">${loadingText}</span>
+</div>
+`;
+    });
 }
 
 function showToolCall(messageDiv, toolName) {
@@ -274,7 +323,9 @@ function finalizeMessage(messageDiv) {
     if (typingIndicator) typingIndicator.remove();
 
     if (messageDiv.rawContent) {
-        contentDiv.innerHTML = marked.parse(messageDiv.rawContent);
+        // Fix improperly formatted chart blocks (no newline before ```)
+        const fixedContent = messageDiv.rawContent.replace(/([^\n])```chart/g, '$1\n\n```chart');
+        contentDiv.innerHTML = marked.parse(fixedContent);
         contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         renderCharts(contentDiv);
     }
@@ -297,35 +348,113 @@ function renderCharts(container) {
             const chartConfig = JSON.parse(content);
             const pre = block.parentElement;
 
-            // Create chart container with explicit height for Plotly - full width of chat
+            // Create wrapper for chart and controls
+            const chartWrapper = document.createElement('div');
+            chartWrapper.className = 'chart-wrapper';
+
+            // Create chart container with explicit height for Plotly
             const chartContainer = document.createElement('div');
             chartContainer.className = 'chart-container';
             chartContainer.id = `chart-${Date.now()}-${index}`;
-            chartContainer.style.cssText = 'width: 100%; height: 420px; margin: 16px 0; background: var(--bg-secondary); padding: 16px; border-radius: 12px; box-sizing: border-box;';
 
-            // Replace code block with chart container
-            pre.replaceWith(chartContainer);
+            // Create controls (view code button)
+            const chartControls = document.createElement('div');
+            chartControls.className = 'chart-controls';
+            chartControls.innerHTML = `
+                <button class="chart-code-btn" onclick="toggleChartCode(this)" title="View/Copy chart data">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="16 18 22 12 16 6"></polyline>
+                        <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                    <span>View Code</span>
+                </button>
+            `;
 
-            // Dark theme layout with explicit height
-            // Hide legend for single-trace charts (no "trace 0" confusion)
+            // Create hidden code block
+            const codeBlock = document.createElement('div');
+            codeBlock.className = 'chart-code-block hidden';
+            codeBlock.innerHTML = `
+                <div class="chart-code-header">
+                    <span>Chart Configuration (JSON)</span>
+                    <button class="copy-code-btn" onclick="copyChartCode(this)" title="Copy to clipboard">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Copy
+                    </button>
+                </div>
+                <pre class="chart-code-content"><code>${escapeHtml(JSON.stringify(chartConfig, null, 2))}</code></pre>
+            `;
+
+            chartWrapper.appendChild(chartContainer);
+            chartWrapper.appendChild(chartControls);
+            chartWrapper.appendChild(codeBlock);
+
+            // Replace code block with chart wrapper
+            pre.replaceWith(chartWrapper);
+
+            // Determine chart height based on content
+            const hasRotatedLabels = chartConfig.layout?.xaxis?.tickangle &&
+                                     Math.abs(chartConfig.layout.xaxis.tickangle) > 0;
+            const numLabels = chartConfig.data?.[0]?.x?.length || chartConfig.data?.[0]?.labels?.length || 0;
+            const maxLabelLength = Math.max(...(chartConfig.data?.[0]?.x || chartConfig.data?.[0]?.labels || []).map(l => String(l).length), 0);
+
+            // Calculate dynamic bottom margin based on labels
+            let bottomMargin = 80;
+            if (hasRotatedLabels && numLabels > 0) {
+                // Estimate needed space for rotated labels
+                bottomMargin = Math.min(180, 80 + maxLabelLength * 4);
+            }
+
+            // Calculate dynamic height
+            const chartHeight = 380 + (bottomMargin > 80 ? bottomMargin - 80 : 0);
+
+            // Dark theme layout with auto-sizing
             const hasSingleTrace = chartConfig.data && chartConfig.data.length === 1;
+            const isPieChart = chartConfig.data?.[0]?.type === 'pie';
+
             const darkLayout = {
                 paper_bgcolor: 'rgba(0,0,0,0)',
                 plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#ececec', family: '-apple-system, BlinkMacSystemFont, sans-serif' },
-                margin: { t: 50, r: 30, b: 60, l: 60 },
-                height: 380,
-                showlegend: !hasSingleTrace,  // Only show legend if multiple traces
+                font: { color: '#ececec', family: '-apple-system, BlinkMacSystemFont, sans-serif', size: 12 },
+                margin: { t: 60, r: 40, b: bottomMargin, l: 70 },
+                height: chartHeight,
+                showlegend: !hasSingleTrace || isPieChart,
                 legend: {
-                    font: { color: '#ececec' },
+                    font: { color: '#ececec', size: 11 },
                     bgcolor: 'rgba(0,0,0,0)'
                 },
-                ...chartConfig.layout
+                // Apply layout from config but ensure our margins take precedence for critical items
+                ...chartConfig.layout,
+                xaxis: {
+                    ...chartConfig.layout?.xaxis,
+                    automargin: true,  // Let Plotly auto-adjust margins
+                    tickfont: { size: 10 },
+                    title: {
+                        ...chartConfig.layout?.xaxis?.title,
+                        standoff: 20  // Add space between axis and title
+                    }
+                },
+                yaxis: {
+                    ...chartConfig.layout?.yaxis,
+                    automargin: true,
+                    tickfont: { size: 10 }
+                },
+                title: {
+                    ...chartConfig.layout?.title,
+                    font: { size: 14, color: '#ececec' },
+                    y: 0.95,  // Position title higher
+                    yanchor: 'top'
+                }
             };
+
+            // Set container height dynamically
+            chartContainer.style.height = `${chartHeight + 40}px`;
 
             const config = {
                 responsive: true,
-                displayModeBar: 'hover',  // Only show on hover so it doesn't cover title
+                displayModeBar: 'hover',
                 modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d'],
                 displaylogo: false,
                 modeBarPosition: 'top-right'
@@ -335,6 +464,37 @@ function renderCharts(container) {
         } catch (e) {
             console.error('Failed to render chart:', e);
         }
+    });
+}
+
+// Toggle chart code visibility
+function toggleChartCode(button) {
+    const wrapper = button.closest('.chart-wrapper');
+    const codeBlock = wrapper.querySelector('.chart-code-block');
+    const isHidden = codeBlock.classList.contains('hidden');
+
+    codeBlock.classList.toggle('hidden');
+    button.querySelector('span').textContent = isHidden ? 'Hide Code' : 'View Code';
+}
+
+// Copy chart code to clipboard
+function copyChartCode(button) {
+    const codeBlock = button.closest('.chart-code-block');
+    const code = codeBlock.querySelector('code').textContent;
+
+    navigator.clipboard.writeText(code).then(() => {
+        const originalText = button.innerHTML;
+        button.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            Copied!
+        `;
+        setTimeout(() => {
+            button.innerHTML = originalText;
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy:', err);
     });
 }
 
@@ -353,7 +513,9 @@ function renderMessages(messages) {
         if (msg.role === 'assistant') {
             messageDiv.rawContent = msg.content;
             const contentDiv = messageDiv.querySelector('.message-content');
-            contentDiv.innerHTML = marked.parse(msg.content);
+            // Fix improperly formatted chart blocks (no newline before ```)
+            const fixedContent = msg.content.replace(/([^\n])```chart/g, '$1\n\n```chart');
+            contentDiv.innerHTML = marked.parse(fixedContent);
             contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
             renderCharts(contentDiv);
         }

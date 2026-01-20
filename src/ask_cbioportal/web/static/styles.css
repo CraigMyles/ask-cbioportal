@@ -591,6 +591,138 @@ body {
     color: var(--text-muted);
 }
 
+/* Chart Wrapper and Controls */
+.chart-wrapper {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    overflow: hidden;
+    margin: 16px 0;
+}
+
+.chart-container {
+    min-height: 380px;
+    padding: 16px;
+}
+
+.chart-controls {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+}
+
+.chart-code-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.chart-code-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
+}
+
+.chart-code-btn svg {
+    flex-shrink: 0;
+}
+
+/* Collapsible code block */
+.chart-code-block {
+    border-top: 1px solid var(--border-color);
+    background: var(--code-bg);
+}
+
+.chart-code-block.hidden {
+    display: none;
+}
+
+.chart-code-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    background: var(--bg-tertiary);
+    border-bottom: 1px solid var(--border-color);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.copy-code-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: var(--accent-color);
+    border: none;
+    border-radius: 4px;
+    color: white;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.copy-code-btn:hover {
+    background: var(--accent-hover);
+}
+
+.copy-code-btn svg {
+    flex-shrink: 0;
+}
+
+.chart-code-content {
+    margin: 0;
+    padding: 16px;
+    overflow-x: auto;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.chart-code-content code {
+    font-size: 11px;
+    line-height: 1.5;
+    background: transparent;
+    padding: 0;
+}
+
+/* Chart Loading Indicator */
+.chart-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    margin: 16px 0;
+    gap: 16px;
+}
+
+.chart-loading-text {
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.chart-loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid var(--border-color);
+    border-top-color: var(--accent-color);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .sidebar {

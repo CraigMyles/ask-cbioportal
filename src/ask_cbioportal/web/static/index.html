@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ask-cbioportal</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=6">
     <!-- Markdown rendering -->
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <!-- Syntax highlighting -->
@@ -63,20 +63,20 @@
                         <h3>Try asking:</h3>
                         <div class="prompt-grid">
                             <button class="prompt-card" onclick="usePrompt(this)">
-                                <span class="prompt-icon">🔬</span>
-                                <span class="prompt-text">How many cancer studies are available?</span>
+                                <span class="prompt-icon">📈</span>
+                                <span class="prompt-text">Do TP53 mutations affect survival in breast cancer?</span>
+                            </button>
+                            <button class="prompt-card" onclick="usePrompt(this)">
+                                <span class="prompt-icon">🔗</span>
+                                <span class="prompt-text">Which genes co-occur with KRAS mutations in colorectal cancer?</span>
                             </button>
                             <button class="prompt-card" onclick="usePrompt(this)">
                                 <span class="prompt-icon">🧬</span>
-                                <span class="prompt-text">Find breast cancer studies with TP53 mutations</span>
+                                <span class="prompt-text">Find ALK fusions in lung cancer studies</span>
                             </button>
                             <button class="prompt-card" onclick="usePrompt(this)">
                                 <span class="prompt-icon">📊</span>
-                                <span class="prompt-text">What are the most mutated genes in lung cancer?</span>
-                            </button>
-                            <button class="prompt-card" onclick="usePrompt(this)">
-                                <span class="prompt-icon">🏥</span>
-                                <span class="prompt-text">Compare KRAS mutations across cancer types</span>
+                                <span class="prompt-text">What are the most mutated genes in pancreatic cancer?</span>
                             </button>
                         </div>
                     </div>
@@ -110,6 +110,6 @@
         </main>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=6"></script>
 </body>
 </html>
