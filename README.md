@@ -10,7 +10,15 @@ A natural language interface for querying [cBioPortal](https://www.cbioportal.or
   - MCP/ClickHouse: For faster queries via cbioportal-mcp server
 - **Interactive chat**: Multi-turn conversations with follow-up questions
 - **CLI and Web interfaces**: Use from terminal or browser
-- **Rich output**: Formatted tables, markdown responses, and streaming
+- **Rich output**: Formatted tables, interactive charts, and streaming responses
+
+## Screenshots
+
+### Welcome Screen
+![Welcome Screen](docs/screenshot-welcome.png)
+
+### Interactive Charts
+![Bar Chart Example](docs/screenshot-bar-chart.png)
 
 ## Installation
 
