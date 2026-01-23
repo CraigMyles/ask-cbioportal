@@ -378,6 +378,65 @@ class RestApiBackend(Backend):
                     "required": ["chart_type", "title"],
                 },
             ),
+            BackendTool(
+                name="query_across_studies",
+                description="Query mutations/alterations for specific genes across multiple studies at once. Use this for cohort building - finding all patients with certain alterations across cancer types or studies. Returns a unified patient list with study sources and optional clinical data.",
+                parameters={
+                    "properties": {
+                        "gene_symbols": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of gene Hugo symbols to query (e.g., ['KRAS', 'TP53'])",
+                        },
+                        "cancer_types": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional: Cancer type keywords to filter studies (e.g., ['colorectal', 'lung']). Will search study names/descriptions.",
+                        },
+                        "studies": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional: Explicit study IDs to query (e.g., ['tcga_coadread', 'msk_impact_2017']). If not provided, uses cancer_types to find studies.",
+                        },
+                        "alteration_types": {
+                            "type": "array",
+                            "items": {"type": "string", "enum": ["MUTATION", "CNA", "FUSION"]},
+                            "description": "Types of alterations to query (default: ['MUTATION'])",
+                        },
+                        "include_clinical": {
+                            "type": "boolean",
+                            "description": "Include clinical attributes for each patient (default: true)",
+                        },
+                        "limit_per_study": {
+                            "type": "integer",
+                            "description": "Maximum patients to return per study (default: 500)",
+                        },
+                    },
+                    "required": ["gene_symbols"],
+                },
+            ),
+            BackendTool(
+                name="export_to_csv",
+                description="Export cohort/query results as a downloadable CSV file. Use this after query_across_studies or other queries to let users download the data. Returns a download link that appears as a button in the chat.",
+                parameters={
+                    "properties": {
+                        "data": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "Array of patient/sample records to export. Each record should have fields like patient_id, sample_id, study_id, gene, mutation, etc.",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "Output filename (default: 'cohort.csv')",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Brief description of the data being exported (shown to user)",
+                        },
+                    },
+                    "required": ["data"],
+                },
+            ),
         ]
 
     async def execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> ToolResult:
@@ -1525,6 +1584,422 @@ class RestApiBackend(Backend):
             data=f"Chart created successfully. Include this EXACTLY in your response to display it:\n\n{chart_markdown}\n\nIMPORTANT: Copy the above chart block exactly as shown."
         )
 
+    async def _tool_query_across_studies(
+        self,
+        gene_symbols: list[str],
+        cancer_types: list[str] | None = None,
+        studies: list[str] | None = None,
+        alteration_types: list[str] | None = None,
+        include_clinical: bool = True,
+        limit_per_study: int = 500,
+    ) -> ToolResult:
+        """Query mutations/alterations across multiple studies for cohort building."""
+        if alteration_types is None:
+            alteration_types = ["MUTATION"]
+
+        # Step 1: Determine which studies to query
+        study_ids = []
+        if studies:
+            # Use explicit study IDs
+            study_ids = studies
+        elif cancer_types:
+            # Search for studies by cancer type keywords
+            response = await self._client.get("/studies")
+            response.raise_for_status()
+            all_studies = response.json()
+
+            for keyword in cancer_types:
+                keyword_lower = keyword.lower()
+                for s in all_studies:
+                    study_id = s.get("studyId", "")
+                    name = s.get("name", "").lower()
+                    desc = s.get("description", "").lower()
+                    cancer_type = s.get("cancerTypeId", "").lower()
+
+                    if (keyword_lower in name or
+                        keyword_lower in desc or
+                        keyword_lower in cancer_type or
+                        keyword_lower in study_id.lower()):
+                        if study_id not in study_ids:
+                            study_ids.append(study_id)
+        else:
+            return ToolResult(
+                success=False,
+                error="Must provide either 'cancer_types' or 'studies' parameter to specify which studies to query.",
+            )
+
+        if not study_ids:
+            return ToolResult(
+                success=False,
+                error=f"No studies found matching the criteria: cancer_types={cancer_types}, studies={studies}",
+            )
+
+        # Limit number of studies to prevent timeout
+        if len(study_ids) > 10:
+            study_ids = study_ids[:10]
+
+        # Step 2: Get gene info
+        gene_response = await self._client.post(
+            "/genes/fetch",
+            params={"geneIdType": "HUGO_GENE_SYMBOL"},
+            json=gene_symbols,
+            headers={"Content-Type": "application/json"},
+        )
+        gene_response.raise_for_status()
+        genes = gene_response.json()
+
+        if not genes:
+            return ToolResult(success=False, error=f"No genes found for symbols: {gene_symbols}")
+
+        gene_map = {g.get("entrezGeneId"): g.get("hugoGeneSymbol") for g in genes}
+        entrez_ids = list(gene_map.keys())
+
+        # Step 3: Query each study
+        all_patients = []
+        studies_searched = []
+        studies_with_data = []
+
+        for study_id in study_ids:
+            try:
+                # Get molecular profiles for the study
+                profiles_response = await self._client.get(
+                    f"/studies/{study_id}/molecular-profiles"
+                )
+                profiles_response.raise_for_status()
+                profiles = profiles_response.json()
+
+                study_patients = []
+
+                # Query mutations if requested
+                if "MUTATION" in alteration_types:
+                    mutation_profile = next(
+                        (p for p in profiles if p.get("molecularAlterationType") == "MUTATION_EXTENDED"),
+                        None,
+                    )
+                    if mutation_profile:
+                        profile_id = mutation_profile.get("molecularProfileId")
+
+                        for entrez_id in entrez_ids:
+                            try:
+                                mutations_response = await self._client.get(
+                                    f"/molecular-profiles/{profile_id}/mutations",
+                                    params={
+                                        "entrezGeneId": entrez_id,
+                                        "sampleListId": f"{study_id}_all",
+                                    },
+                                )
+                                mutations_response.raise_for_status()
+                                mutations = mutations_response.json()
+
+                                for m in mutations[:limit_per_study]:
+                                    patient_record = {
+                                        "patient_id": m.get("patientId"),
+                                        "sample_id": m.get("sampleId"),
+                                        "study_id": study_id,
+                                        "gene": gene_map.get(entrez_id, m.get("gene", {}).get("hugoGeneSymbol")),
+                                        "alteration_type": "MUTATION",
+                                        "mutation": m.get("proteinChange", ""),
+                                        "mutation_type": m.get("mutationType", ""),
+                                        "chromosome": m.get("chr", ""),
+                                        "start_position": m.get("startPosition"),
+                                        "end_position": m.get("endPosition"),
+                                        "reference_allele": m.get("referenceAllele", ""),
+                                        "variant_allele": m.get("variantAllele", ""),
+                                    }
+                                    study_patients.append(patient_record)
+                            except Exception:
+                                continue
+
+                # Query CNAs if requested
+                if "CNA" in alteration_types:
+                    cna_profile = next(
+                        (p for p in profiles if p.get("molecularAlterationType") == "COPY_NUMBER_ALTERATION"),
+                        None,
+                    )
+                    if cna_profile:
+                        profile_id = cna_profile.get("molecularProfileId")
+                        try:
+                            cna_response = await self._client.post(
+                                f"/molecular-profiles/{profile_id}/discrete-copy-number",
+                                params={"discreteCopyNumberEventType": "ALL"},
+                                json={"entrezGeneIds": entrez_ids, "sampleListId": f"{study_id}_all"},
+                                headers={"Content-Type": "application/json"},
+                            )
+                            cna_response.raise_for_status()
+                            cna_data = cna_response.json()
+
+                            for c in cna_data[:limit_per_study]:
+                                alteration_value = c.get("alteration", 0)
+                                if abs(alteration_value) >= 1:  # Only significant CNAs
+                                    cna_type = "Amplification" if alteration_value >= 2 else "Gain" if alteration_value == 1 else "Shallow Deletion" if alteration_value == -1 else "Deep Deletion"
+                                    patient_record = {
+                                        "patient_id": c.get("patientId"),
+                                        "sample_id": c.get("sampleId"),
+                                        "study_id": study_id,
+                                        "gene": gene_map.get(c.get("entrezGeneId"), ""),
+                                        "alteration_type": "CNA",
+                                        "mutation": cna_type,
+                                        "mutation_type": cna_type,
+                                        "cna_value": alteration_value,
+                                    }
+                                    study_patients.append(patient_record)
+                        except Exception:
+                            pass
+
+                # Query fusions if requested
+                if "FUSION" in alteration_types:
+                    sv_profile = next(
+                        (p for p in profiles if p.get("molecularAlterationType") == "STRUCTURAL_VARIANT"),
+                        None,
+                    )
+                    if sv_profile:
+                        profile_id = sv_profile.get("molecularProfileId")
+                        try:
+                            sv_response = await self._client.post(
+                                f"/molecular-profiles/{profile_id}/structural-variant/fetch",
+                                json={
+                                    "entrezGeneIds": entrez_ids,
+                                    "sampleMolecularIdentifiers": [],
+                                },
+                                params={"structuralVariantFilter": "ALL"},
+                                headers={"Content-Type": "application/json"},
+                            )
+                            sv_response.raise_for_status()
+                            sv_data = sv_response.json()
+
+                            for sv in sv_data[:limit_per_study]:
+                                gene1 = sv.get("site1HugoSymbol", "Unknown")
+                                gene2 = sv.get("site2HugoSymbol", "Unknown")
+                                patient_record = {
+                                    "patient_id": sv.get("patientId"),
+                                    "sample_id": sv.get("sampleId"),
+                                    "study_id": study_id,
+                                    "gene": f"{gene1}-{gene2}",
+                                    "alteration_type": "FUSION",
+                                    "mutation": f"{gene1}-{gene2} fusion",
+                                    "mutation_type": sv.get("variantClass", "Fusion"),
+                                }
+                                study_patients.append(patient_record)
+                        except Exception:
+                            pass
+
+                studies_searched.append(study_id)
+                if study_patients:
+                    studies_with_data.append(study_id)
+                    all_patients.extend(study_patients)
+
+            except Exception as e:
+                # Skip studies that fail
+                continue
+
+        # Step 4: Optionally fetch clinical data for matched patients
+        if include_clinical and all_patients:
+            # Group patients by study for clinical data fetch
+            patients_by_study = {}
+            for p in all_patients:
+                sid = p["study_id"]
+                pid = p["patient_id"]
+                if sid not in patients_by_study:
+                    patients_by_study[sid] = set()
+                patients_by_study[sid].add(pid)
+
+            # Fetch key clinical attributes
+            clinical_attrs = ["OS_STATUS", "OS_MONTHS", "SEX", "AGE", "CANCER_TYPE_DETAILED"]
+
+            for study_id, patient_ids in patients_by_study.items():
+                try:
+                    # Get available clinical attributes
+                    attrs_response = await self._client.get(f"/studies/{study_id}/clinical-attributes")
+                    attrs_response.raise_for_status()
+                    available_attrs = {a.get("clinicalAttributeId") for a in attrs_response.json()}
+
+                    # Fetch each available attribute
+                    patient_clinical = {pid: {} for pid in patient_ids}
+
+                    for attr_id in clinical_attrs:
+                        if attr_id not in available_attrs:
+                            continue
+                        try:
+                            clinical_response = await self._client.get(
+                                f"/studies/{study_id}/clinical-data",
+                                params={"clinicalDataType": "PATIENT", "attributeId": attr_id},
+                            )
+                            clinical_response.raise_for_status()
+                            clinical_data = clinical_response.json()
+
+                            for record in clinical_data:
+                                pid = record.get("patientId")
+                                if pid in patient_clinical:
+                                    patient_clinical[pid][attr_id] = record.get("value")
+                        except Exception:
+                            continue
+
+                    # Merge clinical data into patient records
+                    for p in all_patients:
+                        if p["study_id"] == study_id and p["patient_id"] in patient_clinical:
+                            p["clinical"] = patient_clinical[p["patient_id"]]
+                except Exception:
+                    continue
+
+        # Step 5: Deduplicate and summarize
+        # Create unique patient-gene combinations
+        unique_patients = {}
+        for p in all_patients:
+            key = f"{p['study_id']}:{p['patient_id']}:{p['gene']}:{p.get('mutation', '')}"
+            if key not in unique_patients:
+                unique_patients[key] = p
+
+        final_patients = list(unique_patients.values())
+
+        # Count unique patients across all studies
+        unique_patient_ids = set(f"{p['study_id']}:{p['patient_id']}" for p in final_patients)
+        unique_sample_ids = set(f"{p['study_id']}:{p['sample_id']}" for p in final_patients)
+
+        # Generate summary statistics
+        gene_str = ", ".join(gene_symbols)
+        summary = f"Found {len(unique_patient_ids)} patients with {gene_str} alterations across {len(studies_with_data)} studies"
+
+        # Count mutations by type for compact summary
+        from collections import Counter
+        mutation_counts = Counter(p.get("mutation", "Unknown") for p in final_patients)
+        top_mutations = mutation_counts.most_common(10)
+
+        # Count by study
+        study_counts = Counter(p.get("study_id") for p in final_patients)
+
+        # Create compact patient list (limit to 50 for LLM context)
+        # Remove verbose fields for display
+        compact_patients = []
+        for p in final_patients[:50]:
+            compact = {
+                "patient_id": p.get("patient_id"),
+                "study_id": p.get("study_id"),
+                "gene": p.get("gene"),
+                "mutation": p.get("mutation"),
+            }
+            # Add clinical only if present
+            if p.get("clinical"):
+                compact["clinical"] = p.get("clinical")
+            compact_patients.append(compact)
+
+        return ToolResult(
+            success=True,
+            data={
+                "summary": summary,
+                "studies_searched": studies_searched,
+                "studies_with_data": studies_with_data,
+                "total_patients": len(unique_patient_ids),
+                "total_samples": len(unique_sample_ids),
+                "total_alterations": len(final_patients),
+                "genes_queried": gene_symbols,
+                "alteration_types_queried": alteration_types,
+                "top_mutations": [{"mutation": m, "count": c} for m, c in top_mutations],
+                "patients_by_study": dict(study_counts),
+                "sample_patients": compact_patients,  # Limited sample for display
+                "full_data_available": len(final_patients),
+                "note": f"Showing {len(compact_patients)} of {len(final_patients)} records. Use export_to_csv with the sample_patients data to download.",
+            },
+        )
+
+    async def _tool_export_to_csv(
+        self,
+        data: list[dict],
+        filename: str = "cohort.csv",
+        description: str = "Cohort data export",
+    ) -> ToolResult:
+        """Export query results as a downloadable CSV file."""
+        import csv
+        import io
+        import uuid
+        import time
+
+        if not data:
+            return ToolResult(success=False, error="No data provided to export")
+
+        # Ensure filename ends with .csv
+        if not filename.endswith(".csv"):
+            filename = filename + ".csv"
+
+        # Collect all unique keys from the data
+        all_keys = set()
+        for record in data:
+            all_keys.update(record.keys())
+            # Also collect clinical sub-keys if present
+            if "clinical" in record and isinstance(record["clinical"], dict):
+                all_keys.update(record["clinical"].keys())
+                all_keys.discard("clinical")
+
+        # Define column order (important columns first)
+        priority_columns = [
+            "patient_id", "sample_id", "study_id", "gene",
+            "alteration_type", "mutation", "mutation_type",
+            "chromosome", "start_position", "end_position",
+            "reference_allele", "variant_allele", "cna_value",
+        ]
+        clinical_columns = ["OS_STATUS", "OS_MONTHS", "SEX", "AGE", "CANCER_TYPE_DETAILED"]
+
+        # Build ordered column list
+        columns = []
+        for col in priority_columns:
+            if col in all_keys:
+                columns.append(col)
+                all_keys.discard(col)
+        for col in clinical_columns:
+            if col in all_keys:
+                columns.append(col)
+                all_keys.discard(col)
+        # Add remaining columns
+        columns.extend(sorted(all_keys))
+
+        # Generate CSV content
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write header
+        writer.writerow(columns)
+
+        # Write data rows
+        for record in data:
+            row = []
+            # Flatten clinical data if present
+            flat_record = dict(record)
+            if "clinical" in flat_record and isinstance(flat_record["clinical"], dict):
+                flat_record.update(flat_record["clinical"])
+                del flat_record["clinical"]
+
+            for col in columns:
+                value = flat_record.get(col, "")
+                if value is None:
+                    value = ""
+                row.append(str(value))
+            writer.writerow(row)
+
+        csv_content = output.getvalue()
+        output.close()
+
+        # Generate unique file ID
+        file_id = f"{uuid.uuid4().hex[:12]}_{filename}"
+
+        # Store in global CSV files cache (will be accessed by download endpoint)
+        # Import here to avoid circular imports - the cache is defined in app.py
+        from ask_cbioportal.web.app import store_csv_file
+        store_csv_file(file_id, csv_content)
+
+        # Return download link
+        download_url = f"/api/download/{file_id}"
+
+        return ToolResult(
+            success=True,
+            data={
+                "message": f"CSV file ready for download: {description}",
+                "filename": filename,
+                "rows": len(data),
+                "columns": len(columns),
+                "download_link": download_url,
+                "download_markdown": f"[📥 Download {filename}]({download_url})",
+            },
+        )
+
     def get_system_prompt_addition(self) -> str:
         """Return additional context for the REST API backend."""
         return """
@@ -1569,4 +2044,24 @@ When creating charts, choose the appropriate type:
 - lollipop: For mutation position plots (position on x-axis, count on y-axis)
 - scatter: For correlations between two continuous variables
 - heatmap: For gene-sample alteration matrices
+
+### Cohort Building (Multi-Study Queries)
+- Use `query_across_studies` to find patients with specific alterations across multiple studies
+  - Filter by cancer type keywords (e.g., "colorectal", "lung") or explicit study IDs
+  - Query multiple genes and alteration types (MUTATION, CNA, FUSION) in one call
+  - Returns unified patient list with study sources and clinical data
+  - Automatically includes clinical attributes like OS_STATUS, SEX, AGE when available
+
+- Use `export_to_csv` to export query results as downloadable CSV files
+  - Includes patient IDs, sample IDs, mutations, clinical data
+  - Files expire after 1 hour
+  - Useful for downstream ML, statistical analysis, or sharing
+
+Example cohort building workflow:
+1. User: "Find all KRAS mutated patients in colorectal cancer"
+2. Call `query_across_studies(gene_symbols=["KRAS"], cancer_types=["colorectal"])`
+3. Present summary: "Found 234 patients with KRAS mutations across 3 studies"
+4. User: "Export this as CSV"
+5. Call `export_to_csv(data=patients, filename="kras_colorectal_cohort.csv")`
+6. Display download link to user
 """

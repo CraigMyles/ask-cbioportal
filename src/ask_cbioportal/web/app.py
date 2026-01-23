@@ -2,13 +2,14 @@
 
 import json
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -20,6 +21,31 @@ from ask_cbioportal.config import BackendType, Config, get_config
 _config: Config | None = None
 _backend: RestApiBackend | McpClickHouseBackend | None = None
 _sessions: dict[str, Agent] = {}  # session_id -> Agent
+
+# CSV file storage for downloads (file_id -> (content, timestamp, filename))
+_csv_files: dict[str, tuple[str, float, str]] = {}
+CSV_FILE_EXPIRY_SECONDS = 3600  # Files expire after 1 hour
+
+
+def store_csv_file(file_id: str, content: str) -> None:
+    """Store a CSV file for later download."""
+    # Clean up expired files first
+    _cleanup_expired_csv_files()
+    # Extract filename from file_id (format: uuid_filename.csv)
+    parts = file_id.split("_", 1)
+    filename = parts[1] if len(parts) > 1 else "export.csv"
+    _csv_files[file_id] = (content, time.time(), filename)
+
+
+def _cleanup_expired_csv_files() -> None:
+    """Remove expired CSV files from storage."""
+    current_time = time.time()
+    expired = [
+        file_id for file_id, (_, timestamp, _) in _csv_files.items()
+        if current_time - timestamp > CSV_FILE_EXPIRY_SECONDS
+    ]
+    for file_id in expired:
+        del _csv_files[file_id]
 
 
 def get_backend(config: Config) -> RestApiBackend | McpClickHouseBackend:
@@ -335,6 +361,26 @@ async def health() -> dict:
         "llm_provider": _config.llm_provider.value if _config else None,
         "active_sessions": len(_sessions),
     }
+
+
+@app.get("/api/download/{file_id}")
+async def download_csv(file_id: str) -> Response:
+    """Download a CSV file by its ID."""
+    _cleanup_expired_csv_files()
+
+    if file_id not in _csv_files:
+        raise HTTPException(status_code=404, detail="File not found or expired")
+
+    content, _, filename = _csv_files[file_id]
+
+    return Response(
+        content=content,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:

@@ -328,7 +328,40 @@ function finalizeMessage(messageDiv) {
         contentDiv.innerHTML = marked.parse(fixedContent);
         contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
         renderCharts(contentDiv);
+        styleDownloadLinks(contentDiv);
     }
+}
+
+// Style download links as buttons
+function styleDownloadLinks(container) {
+    // Find all links that point to /api/download/
+    const downloadLinks = container.querySelectorAll('a[href^="/api/download/"]');
+
+    downloadLinks.forEach(link => {
+        // Skip if already styled
+        if (link.classList.contains('download-btn')) return;
+
+        // Get the link text and href
+        const text = link.textContent;
+        const href = link.getAttribute('href');
+
+        // Create a styled download button
+        const btn = document.createElement('a');
+        btn.href = href;
+        btn.className = 'download-btn';
+        btn.download = ''; // Trigger download behavior
+        btn.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>${text.replace(/^📥\s*/, '')}</span>
+        `;
+
+        // Replace the original link with the styled button
+        link.replaceWith(btn);
+    });
 }
 
 // Chart rendering with Plotly
@@ -518,6 +551,7 @@ function renderMessages(messages) {
             contentDiv.innerHTML = marked.parse(fixedContent);
             contentDiv.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
             renderCharts(contentDiv);
+            styleDownloadLinks(contentDiv);
         }
     });
 
