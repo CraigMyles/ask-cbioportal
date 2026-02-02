@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
 
+import httpx
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -361,6 +362,69 @@ async def health() -> dict:
         "llm_provider": _config.llm_provider.value if _config else None,
         "active_sessions": len(_sessions),
     }
+
+
+@app.get("/api/models")
+async def list_models() -> dict:
+    """List available LLM models.
+
+    For LiteLLM/OpenAI-compatible providers, queries the models endpoint.
+    Falls back to the configured model if discovery fails.
+    """
+    from ask_cbioportal.config import LLMProvider
+
+    default_model = _config.model if _config else "gpt-4"
+
+    # If not using LiteLLM, return just the configured model
+    if not _config or _config.llm_provider != LLMProvider.LITELLM:
+        return {
+            "models": [default_model],
+            "default": default_model,
+            "source": "config",
+        }
+
+    # Try to fetch models from the LiteLLM/OpenAI-compatible API
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            headers = {}
+            if _config.litellm_api_key:
+                headers["Authorization"] = f"Bearer {_config.litellm_api_key}"
+
+            response = await client.get(
+                f"{_config.litellm_api_base}/models",
+                headers=headers,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            # Extract model IDs
+            all_models = [m["id"] for m in data.get("data", [])]
+
+            # Filter out non-chat models (embedding, whisper, ocr, reranker, etc.)
+            skip_keywords = ["whisper", "ocr", "embedding", "reranker", "paddleocr", "voxtral", "deepseek-ocr"]
+            chat_models = [m for m in all_models if not any(k in m.lower() for k in skip_keywords)]
+
+            # Sort alphabetically
+            chat_models.sort()
+
+            # Ensure default model is in the list
+            if default_model not in chat_models and chat_models:
+                # Use first available model as default
+                default_model = chat_models[0]
+
+            return {
+                "models": chat_models if chat_models else [default_model],
+                "default": default_model,
+                "source": "api",
+            }
+    except Exception as e:
+        # Fall back to configured model on any error
+        return {
+            "models": [default_model],
+            "default": default_model,
+            "source": "config",
+            "error": str(e),
+        }
 
 
 @app.get("/api/download/{file_id}")

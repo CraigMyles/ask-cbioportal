@@ -3,7 +3,8 @@ let sessions = {};  // sessionId -> { ws, messages, currentMessageDiv, isStreami
 let currentSessionId = null;
 let chatHistory = [];  // Array of { id, title, timestamp, messages }
 let shouldAutoScroll = true;
-let selectedModel = localStorage.getItem('selectedModel') || 'GPT-OSS-120B';
+let selectedModel = localStorage.getItem('selectedModel') || null;
+let availableModels = [];
 
 // Elements
 const chatContainer = document.getElementById('chat-container');
@@ -41,11 +42,8 @@ document.addEventListener('DOMContentLoaded', () => {
         gfm: true
     });
 
-    // Initialize model selector
-    const modelSelect = document.getElementById('model-select');
-    if (modelSelect) {
-        modelSelect.value = selectedModel;
-    }
+    // Load available models dynamically
+    loadAvailableModels();
 
     // Start with a new chat if no history
     if (chatHistory.length === 0) {
@@ -787,6 +785,50 @@ function renderChatHistory() {
             </button>
         </div>
     `}).join('');
+}
+
+// Load available models from the API
+async function loadAvailableModels() {
+    const select = document.getElementById('model-select');
+    if (!select) return;
+
+    try {
+        const response = await fetch('/api/models');
+        const data = await response.json();
+
+        availableModels = data.models || [];
+        const defaultModel = data.default;
+
+        // Clear existing options
+        select.innerHTML = '';
+
+        // Populate with fetched models
+        availableModels.forEach(model => {
+            const option = document.createElement('option');
+            option.value = model;
+            option.textContent = model;
+            select.appendChild(option);
+        });
+
+        // Set selected model: prefer saved choice if still available, else use default
+        if (selectedModel && availableModels.includes(selectedModel)) {
+            select.value = selectedModel;
+        } else if (defaultModel && availableModels.includes(defaultModel)) {
+            select.value = defaultModel;
+            selectedModel = defaultModel;
+            localStorage.setItem('selectedModel', selectedModel);
+        } else if (availableModels.length > 0) {
+            select.value = availableModels[0];
+            selectedModel = availableModels[0];
+            localStorage.setItem('selectedModel', selectedModel);
+        }
+
+        console.log(`Loaded ${availableModels.length} models (source: ${data.source})`);
+    } catch (error) {
+        console.error('Failed to load models:', error);
+        // Keep the loading placeholder or show error
+        select.innerHTML = '<option value="">Failed to load models</option>';
+    }
 }
 
 // Model selection - saves choice and sends with each message
